@@ -1,6 +1,6 @@
 // service-worker.js
 
-// Navn på cachen (versjonsnummer er lurt for oppdateringer)
+// Navn på cachen (versjonsnummer er lurt for poppdateringer)
 const CACHE_NAME = 'fit-g4fl-cache-v1';
 
 // Filer som skal mellomlagres for offline bruk
