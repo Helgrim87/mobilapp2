@@ -1,6 +1,6 @@
-// service-worker.js
+// service-worker.js (eller bob.js)
 
-// Navn på cachen (versjonsnummer er lurt for poppdateringer)
+// Navn på cachen (versjonsnummer er lurt for oppdateringer)
 const CACHE_NAME = 'fit-g4fl-cache-v1';
 
 // Filer som skal mellomlagres for offline bruk
@@ -13,6 +13,7 @@ const urlsToCache = [
   // JavaScript-filer
   'Script Level names.js',
   'Script 1.js',
+  'Script 2.js', // <--- LAGT TIL HER
   'Script 3.js',
   'Script 4.js',
   'Script 5.js',
@@ -39,17 +40,25 @@ self.addEventListener('install', event => {
       .then(cache => {
         console.log('[Service Worker] Opened cache:', CACHE_NAME);
         // Legg til alle definerte filer i cachen
+        // Viktig: Sørg for at ALLE filene i urlsToCache faktisk finnes,
+        // ellers vil installasjonen feile her!
         return cache.addAll(urlsToCache).then(() => {
             console.log('[Service Worker] Files successfully cached.');
         }).catch(error => {
-            console.error('[Service Worker] Failed to cache files during install:', error);
-            // Logg hvilke filer som feilet hvis mulig (krever mer avansert logikk)
+            console.error('[Service Worker] Failed to cache some files during install. Check paths in urlsToCache! Error:', error);
+            // Kast feilen videre for å signalisere at installasjonen feilet
+            throw error;
         });
       })
       .then(() => {
         // Tving den nye service workeren til å bli aktiv umiddelbart
         // (ellers må brukeren lukke alle faner av siden først)
+        console.log('[Service Worker] Installation successful, skipping waiting.');
         return self.skipWaiting();
+      })
+      .catch(error => {
+        // Logg at installasjonen feilet overordnet
+        console.error('[Service Worker] Installation failed:', error);
       })
   );
 });
@@ -70,9 +79,11 @@ self.addEventListener('activate', event => {
       );
     }).then(() => {
         // Ta kontroll over åpne sider umiddelbart
+        console.log('[Service Worker] Claiming clients...');
         return self.clients.claim();
     })
   );
+   console.log('[Service Worker] Activated.');
 });
 
 // Event: Fetch - Kjøres hver gang nettleseren prøver å hente en ressurs
@@ -82,14 +93,19 @@ self.addEventListener('fetch', event => {
 
   const requestUrl = new URL(event.request.url);
 
-  // Gå rett til nettverket for ikke-GET requests eller Firebase-requests
-  if (event.request.method !== 'GET' || requestUrl.protocol.startsWith('chrome-extension') || requestUrl.hostname.includes('firebase') || requestUrl.hostname.includes('gstatic.com') || requestUrl.hostname.includes('google.com')) {
-     // console.log('[Service Worker] Bypassing cache for non-GET or external request:', event.request.url);
-    // Viktig: Ikke kall event.respondWith() her hvis du ikke vil håndtere det
+  // Gå rett til nettverket for ikke-GET requests eller eksterne domener/API-kall
+  // (La oss være litt mer presise her for å unngå å cache for mye)
+  const isExternal = requestUrl.origin !== self.location.origin;
+  const isFirebase = requestUrl.hostname.includes('firebase') || requestUrl.hostname.includes('gstatic') || requestUrl.hostname.includes('google.com'); // Eller andre API-domener
+  const isExtension = requestUrl.protocol.startsWith('chrome-extension');
+
+  if (event.request.method !== 'GET' || isExtension || isFirebase || isExternal) {
+    // console.log('[Service Worker] Bypassing cache for non-GET or external/API request:', event.request.url);
+    // La nettleseren håndtere disse som normalt
     return;
   }
 
-  // Prøv å finne forespørselen i cachen
+  // Strategi: Cache First, then Network (for lokale assets listet i urlsToCache)
   event.respondWith(
     caches.match(event.request)
       .then(cachedResponse => {
@@ -103,25 +119,25 @@ self.addEventListener('fetch', event => {
         // console.log('[Service Worker] Fetching from network:', event.request.url);
         return fetch(event.request).then(
           networkResponse => {
-            // Valgfritt: Legg den nye responsen i cachen for fremtidig bruk
-            // Dette er nyttig for filer som ikke var i den opprinnelige urlsToCache,
-            // men som lastes inn senere (f.eks. bilder).
-            // Vær forsiktig med å cache *alt*, spesielt API-responser.
-            // if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-            //   const responseToCache = networkResponse.clone();
-            //   caches.open(CACHE_NAME)
-            //     .then(cache => {
-            //       cache.put(event.request, responseToCache);
-            //     });
-            // }
+            // VIKTIG: Ikke legg automatisk alt fra nettverket i cachen her
+            // med mindre du har en god grunn og en strategi for å oppdatere den.
+            // Den opprinnelige cache.addAll() i 'install' håndterer de essensielle filene.
             return networkResponse;
           }
         ).catch(error => {
             // Håndter feil ved nettverkshenting (f.eks. vis en offline-side)
-            console.warn('[Service Worker] Fetch failed; returning offline page or error.', error);
-            // Man kan returnere en spesifikk offline.html her hvis ønskelig
-            // return caches.match('offline.html');
+            // Dette skjer når brukeren er offline OG ressursen ikke finnes i cache.
+            console.warn('[Service Worker] Fetch failed; user may be offline or resource unavailable.', error, event.request.url);
+            // Du kan returnere en fallback her, f.eks. en enkel offline-side
+            // if (event.request.mode === 'navigate') { // Bare for side-navigasjon
+            //   // return caches.match('/offline.html'); // Krever at offline.html er cachet
+            // }
+            // Returner en generell feilrespons hvis ikke
+             return new Response('Network error trying to fetch resource', {
+               status: 408, // Request Timeout
+               headers: { 'Content-Type': 'text/plain' },
+             });
         });
       })
   );
-});
+}); // Slutt på fetch event listener
